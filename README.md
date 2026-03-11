@@ -101,6 +101,19 @@ venv\Scripts\python.exe main.py
 - Do not mix `cookies` and `api_key/accessToken` from different accounts.
 - If `main.py` says that `curl` is missing, install system `curl.exe` and check `curl --version`.
 
+## Troubleshooting
+
+- `curl` not found
+  Install system `curl.exe` and make sure `curl --version` works in `cmd.exe`.
+- `auth_data.json` is missing
+  Run `venv\Scripts\python.exe auth_fetcher.py --mode wait` and complete login in the browser.
+- The wrong account opens in `auth_fetcher`
+  The browser profile already contains another session. Log out there first, or use the wait mode and sign in to the intended account.
+- Requests start failing after working before
+  Your session cookies or `api_key` may have expired. Regenerate `auth_data.json`.
+- `main.py` starts but cannot answer
+  Check that `auth_data.json` exists, `curl` is installed, and the captured browser session still belongs to the same account.
+
 ## Status
 
 This repository is considered `v1`: compact, practical, and user-oriented. The app is intentionally kept simple for end users, even though some internals could be split into modules later.
