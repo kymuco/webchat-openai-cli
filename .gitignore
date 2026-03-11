@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+
+# Local auth and runtime data
+auth_data*.json
+g4f_chats.json
+cli_state.json
+webchat_state.json
+.env
+.env.*
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
