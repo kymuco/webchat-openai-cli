@@ -4,7 +4,7 @@ import base64
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_AUTH_PATH = Path("auth_data.json")
@@ -47,7 +47,7 @@ class AuthResult:
         """Save AuthResult into a JSON file."""
         path = Path(path)
         data = {
-            "timestamp": datetime.now().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "api_key": self.api_key,
             "cookies": self.cookies,
             "headers": self.headers,
@@ -80,6 +80,19 @@ def _decode_proof_token(header_value: str):
         return json.loads(base64.b64decode(encoded_payload).decode())
     except Exception:
         return None
+
+
+def _import_zendriver():
+    try:
+        import zendriver as nodriver
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "Dependency 'zendriver' is not installed. "
+            "Install auth fetcher requirements with "
+            "`python -m pip install -r requirements.txt` or "
+            "`python -m pip install -U zendriver platformdirs`."
+        ) from error
+    return nodriver
 
 
 def _reset_auth_state(auth_cls, request_config_cls):
@@ -155,16 +168,30 @@ async def _collect_auth_tokens(
     mode: str = "auto",
     ready_timeout: float | None = None,
 ):
-    from g4f.Provider.needs_auth.OpenaiChat import get_cookies, nodriver
-    from g4f.Provider.openai.har_file import (
-        RequestConfig,
-        backend_anon_url,
-        backend_url,
-        conversation_url,
-        prepare_url,
-        start_url,
-    )
-    from g4f.requests import get_nodriver_session
+    try:
+        from g4f.Provider.needs_auth.OpenaiChat import get_cookies
+        from g4f.Provider.openai.har_file import (
+            RequestConfig,
+            backend_anon_url,
+            backend_url,
+            conversation_url,
+            prepare_url,
+            start_url,
+        )
+        from g4f.requests import get_nodriver_session
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "Dependency 'g4f' is not installed in this Python environment. "
+            "Activate the project venv or install requirements."
+        ) from error
+    except ImportError as error:
+        raise RuntimeError(
+            "Installed 'g4f' does not expose the browser auth helpers "
+            "required by auth_fetcher.py. Reinstall project dependencies "
+            "or update the script for your g4f version."
+        ) from error
+
+    nodriver = _import_zendriver()
 
     _reset_auth_state(auth_cls, RequestConfig)
     started_at = time.perf_counter()

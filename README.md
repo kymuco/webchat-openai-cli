@@ -37,7 +37,7 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-`main.py` itself does not require external Python packages, but `auth_fetcher.py` uses `g4f` and `nodriver`.
+`main.py` itself does not require external Python packages, but `auth_fetcher.py` uses `g4f`, `zendriver`, and `platformdirs`.
 
 ## Get `auth_data.json`
 
@@ -107,6 +107,8 @@ venv\Scripts\python.exe main.py
   Install system `curl.exe` and make sure `curl --version` works in `cmd.exe`.
 - `auth_data.json` is missing
   Run `venv\Scripts\python.exe auth_fetcher.py --mode wait` and complete login in the browser.
+- `ImportError: cannot import name 'nodriver'`
+  Reinstall dependencies with `python -m pip install -r requirements.txt`. Recent `g4f` releases use `zendriver` instead of the older `nodriver` package name.
 - The wrong account opens in `auth_fetcher`
   The browser profile already contains another session. Log out there first, or use the wait mode and sign in to the intended account.
 - Requests start failing after working before
