@@ -765,6 +765,7 @@ class ChatGPTWebClient:
         body_path: Optional[str] = None,
         *,
         no_buffer: bool = False,
+        follow_redirects: bool = False,
     ) -> list[str]:
         command = [
             self.curl_bin,
@@ -782,6 +783,8 @@ class ChatGPTWebClient:
         ]
         if no_buffer:
             command.insert(1, "-N")
+        if follow_redirects:
+            command.insert(1, "-L")
         for key, value in headers.items():
             command.extend(["-H", f"{key}: {value}"])
         if body_path is not None:
@@ -794,6 +797,9 @@ class ChatGPTWebClient:
         url: str,
         headers: dict[str, str],
         body: Optional[bytes] = None,
+        *,
+        persist_cookies: bool = True,
+        follow_redirects: bool = False,
     ) -> tuple[int, bytes, str]:
         payload_path: Optional[str] = None
         with tempfile.NamedTemporaryFile(delete=False) as header_file:
@@ -803,10 +809,18 @@ class ChatGPTWebClient:
                 with tempfile.NamedTemporaryFile(delete=False) as payload_file:
                     payload_file.write(body)
                     payload_path = payload_file.name
-            command = self._build_curl_command(method, url, headers, header_path, payload_path)
+            command = self._build_curl_command(
+                method,
+                url,
+                headers,
+                header_path,
+                payload_path,
+                follow_redirects=follow_redirects,
+            )
             result = subprocess.run(command, capture_output=True)
             header_text = Path(header_path).read_text(encoding="utf-8", errors="replace")
-            self._update_cookies_from_text(header_text)
+            if persist_cookies:
+                self._update_cookies_from_text(header_text)
             status = self._extract_status_code(header_text)
             if result.returncode != 0 and not status:
                 stderr_text = result.stderr.decode("utf-8", errors="replace")
@@ -922,8 +936,10 @@ class ChatGPTWebClient:
                     "GET",
                     media_data,
                     {"user-agent": self.base_headers.get("user-agent", "")},
+                    persist_cookies=False,
+                    follow_redirects=True,
                 )
-                if status >= 400:
+                if not 200 <= status < 300:
                     raise RuntimeError(f"Media download failed: status={status}")
                 return raw_body
             raise ValueError("Unsupported media string. Use file path, URL, or data URI.")
@@ -971,6 +987,7 @@ class ChatGPTWebClient:
                 created["upload_url"],
                 upload_headers,
                 data_bytes,
+                persist_cookies=False,
             )
             if upload_status >= 400:
                 body_text = upload_body.decode("utf-8", errors="replace")
