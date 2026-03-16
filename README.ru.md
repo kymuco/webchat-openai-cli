@@ -97,7 +97,7 @@ venv\Scripts\python.exe main.py
 ## Замечания
 
 - `auth_data.json` является основным источником авторизации.
-- `.env` не обязателен. Если он есть, `accessToken` используется только как запасной fallback.
+- `.env` не обязателен. Если он есть, `accessToken` используется как запасной fallback даже при отсутствии `auth_data.json`, но полный `auth_data.json` остаётся самым совместимым вариантом.
 - Не смешивайте `cookies` и `api_key/accessToken` от разных аккаунтов.
 - Если `main.py` сообщает, что не найден `curl`, установите системный `curl.exe` и проверьте `curl --version`.
 

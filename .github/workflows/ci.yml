@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Compile sources
+        run: |
+          python -m py_compile main.py auth_fetcher.py auth_fetcher_wait.py tests\test_main.py tests\test_auth_fetcher.py
+
+      - name: Run tests
+        run: |
+          pytest -q

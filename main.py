@@ -139,6 +139,7 @@ TRANSLATIONS = {
         "warmup": "Warmup...",
         "warmup_ok": "ok",
         "warmup_skip": "skip",
+        "startup_error": "Startup error: {error_type}: {error}",
         "mini_cli": "Mini ChatGPT CLI. Type /help",
         "auth_source": "Auth source: {auth_source}",
         "no_active_chat": "No active chat selected",
@@ -200,6 +201,7 @@ Media:
         "warmup": "Прогрев...",
         "warmup_ok": "ok",
         "warmup_skip": "skip",
+        "startup_error": "Ошибка запуска: {error_type}: {error}",
         "mini_cli": "Mini ChatGPT CLI. Введите /help",
         "auth_source": "Источник авторизации: {auth_source}",
         "no_active_chat": "Активный чат не выбран",
@@ -334,12 +336,15 @@ def _read_json_dict(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _load_app_state_payload() -> dict[str, Any]:
-    return _read_json_dict(APP_STATE_FILE)
+def _load_app_state_payload(state_path: str | Path = APP_STATE_FILE) -> dict[str, Any]:
+    return _read_json_dict(Path(state_path))
 
 
-def _save_app_state_payload(payload: dict[str, Any]) -> None:
-    APP_STATE_FILE.write_text(
+def _save_app_state_payload(
+    payload: dict[str, Any],
+    state_path: str | Path = APP_STATE_FILE,
+) -> None:
+    Path(state_path).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -366,9 +371,9 @@ def _build_runtime_system_prompt(
     return "\n".join(lines)
 
 
-def load_cli_state() -> dict[str, Any]:
+def load_cli_state(state_path: str | Path = APP_STATE_FILE) -> dict[str, Any]:
     state = DEFAULT_RUNTIME_STATE.copy()
-    payload = _load_app_state_payload().get("runtime")
+    payload = _load_app_state_payload(state_path).get("runtime")
     if not isinstance(payload, dict):
         payload = _read_json_dict(LEGACY_CLI_STATE_FILE)
     model = payload.get("model")
@@ -392,7 +397,10 @@ def load_cli_state() -> dict[str, Any]:
     return state
 
 
-def save_cli_state(state: dict[str, Any]) -> None:
+def save_cli_state(
+    state: dict[str, Any],
+    state_path: str | Path = APP_STATE_FILE,
+) -> None:
     runtime_payload = {
         "model": state["model"],
         "language": normalize_language(state["language"]),
@@ -400,9 +408,9 @@ def save_cli_state(state: dict[str, Any]) -> None:
         "reasoning_effort": state["reasoning_effort"],
         "show_metrics": bool(state["show_metrics"]),
     }
-    payload = _load_app_state_payload()
+    payload = _load_app_state_payload(state_path)
     payload["runtime"] = runtime_payload
-    _save_app_state_payload(payload)
+    _save_app_state_payload(payload, state_path)
 
 
 @dataclass
@@ -486,10 +494,18 @@ def _get_access_token_expiry(access_token: Optional[str]) -> Optional[datetime]:
 
 
 def load_auth_data(auth_file: str | Path = DEFAULT_AUTH_FILE) -> AuthData:
-    auth = AuthData.from_json(auth_file)
+    auth_path = Path(auth_file)
+    try:
+        auth = AuthData.from_json(auth_path)
+    except FileNotFoundError:
+        auth = AuthData()
+    except OSError as error:
+        raise RuntimeError(f"Failed to read auth data from {auth_path}: {error}") from error
+    except ValueError as error:
+        raise RuntimeError(f"Failed to parse auth data from {auth_path}: {error}") from error
     candidates: list[tuple[str, str]] = []
     if auth.api_key:
-        candidates.append((f"{Path(auth_file).name}:api_key", auth.api_key))
+        candidates.append((f"{auth_path.name}:api_key", auth.api_key))
     env_api_key = _load_access_token()
     if env_api_key and env_api_key != auth.api_key:
         candidates.append((".env:accessToken", env_api_key))
@@ -516,7 +532,7 @@ def load_auth_data(auth_file: str | Path = DEFAULT_AUTH_FILE) -> AuthData:
                 + ". Refresh authorization before running the CLI."
             )
         raise RuntimeError(
-            f"No access token found. Expected api_key in {Path(auth_file).name}"
+            f"No access token found. Expected api_key in {auth_path.name}"
             " or accessToken in .env."
         )
     return auth
@@ -1306,7 +1322,7 @@ class CliChatApp:
         return list(SUPPORTED_MODELS)
 
     def _load_chats(self) -> None:
-        payload = _load_app_state_payload()
+        payload = _load_app_state_payload(self.state_path)
         if not payload:
             payload = _read_json_dict(LEGACY_CHATS_STATE_FILE)
         chats = payload.get("chats") if isinstance(payload, dict) else None
@@ -1321,10 +1337,10 @@ class CliChatApp:
             self._active_chat_id = active_chat_id
 
     def _save_chats(self) -> None:
-        payload = _load_app_state_payload()
+        payload = _load_app_state_payload(self.state_path)
         payload["active_chat_id"] = self._active_chat_id
         payload["chats"] = self._chats
-        _save_app_state_payload(payload)
+        _save_app_state_payload(payload, self.state_path)
 
     def new_chat(self, title: Optional[str] = None, temporary: bool = False) -> str:
         chat_id = uuid.uuid4().hex[:10]
@@ -1798,9 +1814,20 @@ def handle_command(bot: CliChatApp, state: dict[str, Any], command_line: str) ->
     return False
 
 
-def main() -> None:
-    bot = CliChatApp()
+def main() -> int:
     state = load_cli_state()
+    try:
+        bot = CliChatApp()
+    except Exception as exc:
+        error(
+            tr(
+                state["language"],
+                "startup_error",
+                error_type=type(exc).__name__,
+                error=exc,
+            )
+        )
+        return 1
     if bot.get_active_chat_id() is None:
         chat_id = bot.new_chat(temporary=False)
         active_chat = bot.get_active_chat()
@@ -1808,9 +1835,9 @@ def main() -> None:
             active_chat["language"] = state["language"]
             bot._save_chats()
         success(tr(state["language"], "created_default_chat", chat_id=chat_id))
-    print("Warmup...", end=" ", flush=True)
+    print(tr(state["language"], "warmup"), end=" ", flush=True)
     warmed = bot.transport.warmup()
-    print("ok" if warmed else "skip")
+    print(tr(state["language"], "warmup_ok" if warmed else "warmup_skip"))
     auth_source = bot.transport.auth.api_key_source or "-"
     info(tr(state["language"], "mini_cli"))
     info(tr(state["language"], "auth_source", auth_source=auth_source))
@@ -1874,7 +1901,8 @@ def main() -> None:
                     error=exc,
                 )
             )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

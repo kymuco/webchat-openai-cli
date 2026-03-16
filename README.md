@@ -97,7 +97,7 @@ venv\Scripts\python.exe main.py
 ## Notes
 
 - `auth_data.json` is the primary auth source.
-- `.env` is optional. If present, `accessToken` is used only as a fallback.
+- `.env` is optional. If present, `accessToken` is used as a fallback even when `auth_data.json` is missing, but a full `auth_data.json` remains the most compatible setup.
 - Do not mix `cookies` and `api_key/accessToken` from different accounts.
 - If `main.py` says that `curl` is missing, install system `curl.exe` and check `curl --version`.
 

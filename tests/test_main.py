@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import shutil
 import threading
+import builtins
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Iterator
 
 import main
+import pytest
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 40
 
@@ -94,3 +97,152 @@ def test_media_url_download_follows_redirects_without_polluting_auth_cookies() -
 
     assert body == PNG_BYTES
     assert "poisoned" not in client.auth.cookies
+
+
+def test_load_auth_data_uses_env_token_when_auth_file_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("accessToken", raising=False)
+    (tmp_path / ".env").write_text("accessToken=not.a.jwt\n", encoding="utf-8")
+
+    auth = main.load_auth_data(tmp_path / "missing_auth.json")
+
+    assert auth.api_key == "not.a.jwt"
+    assert auth.api_key_source == ".env:accessToken"
+    assert auth.cookies == {}
+    assert auth.headers == {}
+
+
+def test_load_auth_data_without_sources_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("accessToken", raising=False)
+
+    with pytest.raises(RuntimeError, match="No access token found"):
+        main.load_auth_data(tmp_path / "missing_auth.json")
+
+
+def test_cli_chat_app_uses_custom_state_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    class FakeTransport:
+        def __init__(self, auth_file: str | None = None, timeout: int = 90):
+            self.auth = main.AuthData(api_key="token", api_key_source="test")
+
+    custom_state = tmp_path / "custom_state.json"
+    default_state = tmp_path / "webchat_state.json"
+    custom_state.write_text(
+        json.dumps(
+            {
+                "active_chat_id": "x",
+                "chats": {
+                    "x": {
+                        "title": "Custom",
+                        "temporary": False,
+                        "conversation": None,
+                        "model": None,
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                        "updated_at": "2026-01-01T00:00:00+00:00",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    default_state.write_text(
+        json.dumps(
+            {
+                "active_chat_id": "y",
+                "chats": {
+                    "y": {
+                        "title": "Default",
+                        "temporary": False,
+                        "conversation": None,
+                        "model": None,
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                        "updated_at": "2026-01-01T00:00:00+00:00",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "ChatGPTWebClient", FakeTransport)
+
+    app = main.CliChatApp(state_path=custom_state)
+    created_chat_id = app.new_chat("Added")
+
+    custom_payload = json.loads(custom_state.read_text(encoding="utf-8"))
+    default_payload = json.loads(default_state.read_text(encoding="utf-8"))
+
+    assert app.get_active_chat_id() == created_chat_id
+    assert "x" in app._chats
+    assert created_chat_id in custom_payload["chats"]
+    assert default_payload["active_chat_id"] == "y"
+    assert list(default_payload["chats"]) == ["y"]
+
+
+def test_main_returns_friendly_startup_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FailingApp:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(main, "CliChatApp", FailingApp)
+    monkeypatch.setattr(main, "load_cli_state", lambda *args, **kwargs: main.DEFAULT_RUNTIME_STATE.copy())
+
+    rc = main.main()
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "Startup error: RuntimeError: boom" in captured.out
+
+
+def test_main_localizes_warmup_output(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FakeTransport:
+        def __init__(self):
+            self.auth = main.AuthData(api_key="token", api_key_source="test")
+
+        def warmup(self) -> bool:
+            return True
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs):
+            self.transport = FakeTransport()
+            self._chat = {
+                "title": "Новый чат",
+                "temporary": False,
+                "conversation": None,
+            }
+
+        def get_active_chat_id(self) -> str | None:
+            return "chat1"
+
+        def get_active_chat(self) -> dict[str, object]:
+            return self._chat
+
+        def _save_chats(self) -> None:
+            return None
+
+    state = main.DEFAULT_RUNTIME_STATE.copy()
+    state["language"] = "ru"
+    monkeypatch.setattr(main, "CliChatApp", FakeApp)
+    monkeypatch.setattr(main, "load_cli_state", lambda *args, **kwargs: state.copy())
+    monkeypatch.setattr(builtins, "input", lambda *args, **kwargs: (_ for _ in ()).throw(EOFError()))
+
+    rc = main.main()
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "Прогрев... ok" in captured.out
