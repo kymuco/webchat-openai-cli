@@ -188,6 +188,83 @@ def test_cli_chat_app_uses_custom_state_path(
     assert list(default_payload["chats"]) == ["y"]
 
 
+def test_handle_command_writes_runtime_to_custom_state_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    class FakeTransport:
+        def __init__(self, auth_file: str | None = None, timeout: int = 90):
+            self.auth = main.AuthData(api_key="token", api_key_source="test")
+
+    custom_state = tmp_path / "custom_state.json"
+    default_state = tmp_path / "webchat_state.json"
+    custom_state.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "model": "gpt-4o-mini",
+                    "language": "en",
+                    "web_search": False,
+                    "reasoning_effort": None,
+                    "show_metrics": True,
+                },
+                "active_chat_id": "x",
+                "chats": {
+                    "x": {
+                        "title": "Custom",
+                        "temporary": False,
+                        "conversation": None,
+                        "model": None,
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                        "updated_at": "2026-01-01T00:00:00+00:00",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    default_state.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "model": "default-model",
+                    "language": "en",
+                    "web_search": False,
+                    "reasoning_effort": None,
+                    "show_metrics": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "ChatGPTWebClient", FakeTransport)
+
+    app = main.CliChatApp(state_path=custom_state)
+    state = main.load_cli_state(custom_state)
+    main.handle_command(app, state, "/model changed-model")
+
+    custom_payload = json.loads(custom_state.read_text(encoding="utf-8"))
+    default_payload = json.loads(default_state.read_text(encoding="utf-8"))
+
+    assert custom_payload["runtime"]["model"] == "changed-model"
+    assert default_payload["runtime"]["model"] == "default-model"
+
+
+def test_load_cli_state_warns_and_falls_back_for_corrupted_state(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path,
+) -> None:
+    state_path = tmp_path / "webchat_state.json"
+    state_path.write_text('{"runtime":', encoding="utf-8")
+
+    state = main.load_cli_state(state_path)
+
+    captured = capsys.readouterr()
+    assert state == main.DEFAULT_RUNTIME_STATE
+    assert f"Warning: failed to load JSON from {state_path}" in captured.out
+
+
 def test_main_returns_friendly_startup_error(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

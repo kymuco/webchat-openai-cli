@@ -79,6 +79,7 @@ UPLOAD_HEADERS = {
     "sec-fetch-site": "cross-site",
 }
 FILE_CACHE: dict[str, dict[str, Any]] = {}
+WARNED_JSON_READ_ERRORS: set[str] = set()
 
 
 class UiColors:
@@ -326,28 +327,59 @@ def _format_metric_seconds(value: Any) -> str:
     return "-"
 
 
-def _read_json_dict(path: Path) -> dict[str, Any]:
+def _warn_json_read_error(path: Path, error: Exception) -> None:
+    try:
+        key = str(path.resolve())
+    except OSError:
+        key = str(path)
+    if key in WARNED_JSON_READ_ERRORS:
+        return
+    WARNED_JSON_READ_ERRORS.add(key)
+    warning(f"Warning: failed to load JSON from {path}: {error}. Treating it as empty.")
+
+
+def _read_json_dict(path: Path, *, warn_on_error: bool = False) -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as error:
+        if warn_on_error:
+            _warn_json_read_error(path, error)
         return {}
     return payload if isinstance(payload, dict) else {}
 
 
 def _load_app_state_payload(state_path: str | Path = APP_STATE_FILE) -> dict[str, Any]:
-    return _read_json_dict(Path(state_path))
+    return _read_json_dict(Path(state_path), warn_on_error=True)
 
 
 def _save_app_state_payload(
     payload: dict[str, Any],
     state_path: str | Path = APP_STATE_FILE,
 ) -> None:
-    Path(state_path).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    target_path = Path(state_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    temp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            delete=False,
+            dir=target_path.parent,
+            prefix=f".{target_path.name}.",
+            suffix=".tmp",
+        ) as handle:
+            handle.write(serialized)
+            temp_path = Path(handle.name)
+        temp_path.replace(target_path)
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _build_runtime_system_prompt(
@@ -1673,8 +1705,15 @@ def send_image_prompt(bot: CliChatApp, state: dict[str, Any], command_line: str)
     )
 
 
-def handle_command(bot: CliChatApp, state: dict[str, Any], command_line: str) -> bool:
+def handle_command(
+    bot: CliChatApp,
+    state: dict[str, Any],
+    command_line: str,
+    *,
+    state_path: str | Path | None = None,
+) -> bool:
     language = normalize_language(state.get("language"))
+    runtime_state_path = Path(state_path) if state_path is not None else Path(getattr(bot, "state_path", APP_STATE_FILE))
     parts = command_line.strip().split()
     if not parts:
         return False
@@ -1705,7 +1744,7 @@ def handle_command(bot: CliChatApp, state: dict[str, Any], command_line: str) ->
             info(f"model={state['model']}")
             return False
         state["model"] = args[0]
-        save_cli_state(state)
+        save_cli_state(state, runtime_state_path)
         print_settings(state)
         return False
     if command in {"/lang", "/language"}:
@@ -1713,7 +1752,7 @@ def handle_command(bot: CliChatApp, state: dict[str, Any], command_line: str) ->
             info(f"language={state['language']}")
             return False
         state["language"] = parse_language(args[0])
-        save_cli_state(state)
+        save_cli_state(state, runtime_state_path)
         active_chat = bot.get_active_chat()
         if isinstance(active_chat, dict):
             active_chat["language"] = state["language"]
@@ -1725,7 +1764,7 @@ def handle_command(bot: CliChatApp, state: dict[str, Any], command_line: str) ->
             info(f"web_search={state['web_search']}")
             return False
         state["web_search"] = parse_bool(args[0])
-        save_cli_state(state)
+        save_cli_state(state, runtime_state_path)
         print_settings(state)
         info(tr(language, "search_hint_info"))
         return False
@@ -1734,7 +1773,7 @@ def handle_command(bot: CliChatApp, state: dict[str, Any], command_line: str) ->
             info(f"effort={state['reasoning_effort'] or '-'}")
             return False
         state["reasoning_effort"] = parse_reasoning_effort(args[0])
-        save_cli_state(state)
+        save_cli_state(state, runtime_state_path)
         print_settings(state)
         info(tr(language, "effort_hint_info"))
         return False
@@ -1743,7 +1782,7 @@ def handle_command(bot: CliChatApp, state: dict[str, Any], command_line: str) ->
             info(f"metrics={state['show_metrics']}")
             return False
         state["show_metrics"] = parse_bool(args[0])
-        save_cli_state(state)
+        save_cli_state(state, runtime_state_path)
         print_settings(state)
         return False
     if command == "/img":
@@ -1814,10 +1853,13 @@ def handle_command(bot: CliChatApp, state: dict[str, Any], command_line: str) ->
     return False
 
 
-def main() -> int:
-    state = load_cli_state()
+def main(
+    state_path: str | Path = APP_STATE_FILE,
+    auth_file: str | Path = DEFAULT_AUTH_FILE,
+) -> int:
+    state = load_cli_state(state_path)
     try:
-        bot = CliChatApp()
+        bot = CliChatApp(state_path=state_path, auth_file=auth_file)
     except Exception as exc:
         error(
             tr(
@@ -1864,7 +1906,7 @@ def main() -> int:
             continue
         if user_input.startswith("/"):
             try:
-                should_exit = handle_command(bot, state, user_input)
+                should_exit = handle_command(bot, state, user_input, state_path=bot.state_path)
             except Exception as exc:
                 error(
                     tr(
