@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import re
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,8 +56,26 @@ class AuthResult:
             "proof_token": self.proof_token,
             "turnstile_token": self.turnstile_token,
         }
-        with path.open("w", encoding="utf-8") as file:
-            json.dump(data, file, indent=2, ensure_ascii=False)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                delete=False,
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+            ) as file:
+                json.dump(data, file, indent=2, ensure_ascii=False)
+                temp_path = Path(file.name)
+            temp_path.replace(path)
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         return path
 
 
@@ -103,7 +122,37 @@ def _reset_auth_state(auth_cls, request_config_cls):
     auth_cls._expires = None
 
 
-async def _submit_probe_prompt(page, auth_cls):
+def _normalize_probe_prompt(value: str | None) -> str:
+    normalized = str(value or "").strip()
+    return normalized or DEFAULT_AUTH_PROMPT
+
+
+def _print_cleanup_warning(action: str, error: Exception) -> None:
+    print(f"Warning: failed to {action}: {type(error).__name__}: {error}")
+
+
+async def _capture_page_state(page, auth_cls, get_cookies) -> None:
+    try:
+        auth_cls.request_config.data_build = _unwrap_page_value(
+            await page.evaluate(
+                "document.documentElement.getAttribute('data-build')",
+                return_by_value=True,
+            )
+        )
+    except Exception as error:
+        _print_cleanup_warning("capture page build metadata", error)
+    try:
+        auth_cls.request_config.cookies = await page.send(get_cookies([auth_cls.url]))
+    except Exception as error:
+        _print_cleanup_warning("capture browser cookies", error)
+    try:
+        await page.close()
+    except Exception as error:
+        _print_cleanup_warning("close the browser page cleanly", error)
+
+
+async def _submit_probe_prompt(page, auth_cls, prompt: str = DEFAULT_AUTH_PROMPT):
+    normalized_prompt = _normalize_probe_prompt(prompt)
     try:
         if getattr(auth_cls, "needs_auth", False):
             await asyncio.wait_for(
@@ -114,7 +163,7 @@ async def _submit_probe_prompt(page, auth_cls):
         pass
 
     textarea = await asyncio.wait_for(page.select("#prompt-textarea", 300), timeout=60)
-    await textarea.send_keys(DEFAULT_AUTH_PROMPT)
+    await textarea.send_keys(normalized_prompt)
     await asyncio.sleep(0.3)
 
     try:
@@ -167,6 +216,7 @@ async def _collect_auth_tokens(
     proof_grace: float = DEFAULT_PROOF_GRACE,
     mode: str = "auto",
     ready_timeout: float | None = None,
+    probe_prompt: str = DEFAULT_AUTH_PROMPT,
 ):
     try:
         from g4f.Provider.needs_auth.OpenaiChat import get_cookies
@@ -197,6 +247,7 @@ async def _collect_auth_tokens(
     started_at = time.perf_counter()
     access_token_at = None
     user_agent = None
+    normalized_probe_prompt = _normalize_probe_prompt(probe_prompt)
 
     async with get_nodriver_session(proxy=proxy) as browser:
         page = await browser.get(auth_cls.url)
@@ -248,7 +299,7 @@ async def _collect_auth_tokens(
                     "Capture will continue automatically once the chat input is ready."
                 )
                 await _wait_for_chat_input(page, ready_timeout=ready_timeout)
-            await _submit_probe_prompt(page, auth_cls)
+            await _submit_probe_prompt(page, auth_cls, prompt=normalized_probe_prompt)
             capture_started_at = time.perf_counter()
 
             while True:
@@ -278,14 +329,7 @@ async def _collect_auth_tokens(
 
                 await asyncio.sleep(DEFAULT_POLL_INTERVAL)
         finally:
-            auth_cls.request_config.data_build = _unwrap_page_value(
-                await page.evaluate(
-                    "document.documentElement.getAttribute('data-build')",
-                    return_by_value=True,
-                )
-            )
-            auth_cls.request_config.cookies = await page.send(get_cookies([auth_cls.url]))
-            await page.close()
+            await _capture_page_state(page, auth_cls, get_cookies)
 
     auth_cls._create_request_args(
         auth_cls.request_config.cookies,
@@ -314,9 +358,15 @@ async def run_auth_and_save(
     auth_timeout: float = DEFAULT_AUTH_TIMEOUT,
     mode: str = "auto",
     ready_timeout: float | None = DEFAULT_READY_TIMEOUT,
+    probe_prompt: str = DEFAULT_AUTH_PROMPT,
 ):
     """Run auth via NoDriver and save collected tokens into JSON."""
+    normalized_probe_prompt = _normalize_probe_prompt(probe_prompt)
     print(f"Start authorization via NoDriver (mode={mode})...")
+    print(
+        "Probe prompt will be sent once to trigger auth capture: "
+        f"{normalized_probe_prompt!r}"
+    )
 
     try:
         from g4f.Provider.needs_auth import OpenaiChat
@@ -332,6 +382,7 @@ async def run_auth_and_save(
         auth_timeout=auth_timeout,
         mode=mode,
         ready_timeout=ready_timeout if (ready_timeout and ready_timeout > 0) else None,
+        probe_prompt=normalized_probe_prompt,
     )
 
     auth_result = AuthResult(
@@ -385,6 +436,11 @@ def _parse_args() -> argparse.Namespace:
         default=DEFAULT_READY_TIMEOUT,
         help="Only for wait mode: seconds to wait for login/chat readiness. 0 means wait indefinitely.",
     )
+    parser.add_argument(
+        "--probe-prompt",
+        default=DEFAULT_AUTH_PROMPT,
+        help="Prompt text to send once in order to trigger auth capture.",
+    )
     return parser.parse_args()
 
 
@@ -397,6 +453,7 @@ if __name__ == "__main__":
                 auth_timeout=args.timeout,
                 mode=args.mode,
                 ready_timeout=args.ready_timeout,
+                probe_prompt=args.probe_prompt,
             )
         )
     except KeyboardInterrupt:
