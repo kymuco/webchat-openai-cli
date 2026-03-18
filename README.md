@@ -14,6 +14,7 @@ The project is split into two practical parts:
 - streaming replies in the terminal
 - latency metrics: `first_token`, `last_token`, `total`
 - single local state file: `webchat_state.json`
+- atomic writes for local state and `auth_data.json`
 - image prompts through `/img`
 - `auto` and `wait` auth capture modes
 - English and Russian CLI localization
@@ -51,6 +52,12 @@ Wait mode if you need time to log in or register first:
 
 ```cmd
 venv\Scripts\python.exe auth_fetcher.py --mode wait
+```
+
+Optional: override the one-shot probe prompt used to trigger auth capture:
+
+```cmd
+venv\Scripts\python.exe auth_fetcher.py --mode auto --probe-prompt "Ping"
 ```
 
 Short alias for wait mode:
@@ -98,7 +105,9 @@ venv\Scripts\python.exe main.py
 
 - `auth_data.json` is the primary auth source.
 - `.env` is optional. If present, `accessToken` is used as a fallback even when `auth_data.json` is missing, but a full `auth_data.json` remains the most compatible setup.
+- `auth_fetcher.py` sends one probe message to trigger capture. The default text is `"Hello"`, and you can override it with `--probe-prompt`.
 - Do not mix `cookies` and `api_key/accessToken` from different accounts.
+- Local state and auth files are written atomically to reduce the chance of truncated JSON after interruption.
 - If `main.py` says that `curl` is missing, install system `curl.exe` and check `curl --version`.
 
 ## Troubleshooting
@@ -118,4 +127,6 @@ venv\Scripts\python.exe main.py
 
 ## Status
 
-This repository is considered `v1`: compact, practical, and user-oriented. The app is intentionally kept simple for end users, even though some internals could be split into modules later.
+This repository is now considered `stable v1`: compact, practical, and user-oriented.
+
+The scope of this repo remains the end-user CLI plus browser auth capture. Future reusable transport or adapter work is expected to move into a separate repository such as `webchat-adapter`, so this project can stay focused and low-maintenance.
