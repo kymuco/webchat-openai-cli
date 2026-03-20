@@ -1,7 +1,7 @@
 import argparse
 import asyncio
 
-from auth_fetcher import run_auth_and_save
+from auth_fetcher import DEFAULT_AUTH_TIMEOUT, run_auth_and_save
 
 
 def _parse_args() -> argparse.Namespace:
@@ -16,8 +16,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=45.0,
-        help="Seconds to wait for access token capture after the probe message is sent.",
+        default=DEFAULT_AUTH_TIMEOUT,
+        help="Seconds to wait for auth capture after you trigger it from the browser.",
     )
     parser.add_argument(
         "--ready-timeout",

@@ -54,7 +54,9 @@ Wait mode if you need time to log in or register first:
 venv\Scripts\python.exe auth_fetcher.py --mode wait
 ```
 
-Optional: override the one-shot probe prompt used to trigger auth capture:
+In `wait` mode the browser stays open until the chat is ready. After that, send any message manually in the browser to trigger auth capture.
+
+Optional: override the one-shot probe prompt used by `auto` mode:
 
 ```cmd
 venv\Scripts\python.exe auth_fetcher.py --mode auto --probe-prompt "Ping"
@@ -105,7 +107,8 @@ venv\Scripts\python.exe main.py
 
 - `auth_data.json` is the primary auth source.
 - `.env` is optional. If present, `accessToken` is used as a fallback even when `auth_data.json` is missing, but a full `auth_data.json` remains the most compatible setup.
-- `auth_fetcher.py` sends one probe message to trigger capture. The default text is `"Hello"`, and you can override it with `--probe-prompt`.
+- In `auto` mode, `auth_fetcher.py` sends one probe message to trigger capture. The default text is `"Hello"`, and you can override it with `--probe-prompt`.
+- In `wait` mode, `auth_fetcher.py` does not send the probe automatically. Log in or register, then send any message manually in the browser to trigger capture.
 - Do not mix `cookies` and `api_key/accessToken` from different accounts.
 - Local state and auth files are written atomically to reduce the chance of truncated JSON after interruption.
 - If `main.py` says that `curl` is missing, install system `curl.exe` and check `curl --version`.
@@ -115,7 +118,7 @@ venv\Scripts\python.exe main.py
 - `curl` not found
   Install system `curl.exe` and make sure `curl --version` works in `cmd.exe`.
 - `auth_data.json` is missing
-  Run `venv\Scripts\python.exe auth_fetcher.py --mode wait` and complete login in the browser.
+  Run `venv\Scripts\python.exe auth_fetcher.py --mode wait`, complete login in the browser, then send any message in the chat window.
 - `ImportError: cannot import name 'nodriver'`
   Reinstall dependencies with `python -m pip install -r requirements.txt`. Recent `g4f` releases use `zendriver` instead of the older `nodriver` package name.
 - The wrong account opens in `auth_fetcher`
